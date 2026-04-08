@@ -63,6 +63,9 @@ class GraphObservation(BaseModel):
     temporal_windows: List[TimeWindow] = Field(default_factory=list, description="Aggregated activity bursts")
     graph_stats: GraphStats = Field(..., description="Global metrics")
     step_budget: int = Field(..., description="Remaining investigation steps")
+    reward: float = Field(0.0, description="Cumulative reward signal")
+    done: bool = Field(False, description="Whether the episode is finished")
+    info: Dict[str, Any] = Field(default_factory=dict, description="Additional environment info")
 
 # ==========================================
 # ACTION MODELS

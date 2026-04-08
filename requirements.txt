@@ -2,3 +2,6 @@ pydantic>=2.0.0
 networkx>=3.0
 Faker>=19.0.0
 openai>=1.0.0
+openenv-core>=0.2.3
+uvicorn>=0.20.0
+fastapi>=0.95.0

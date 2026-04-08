@@ -1,3 +1,12 @@
+---
+title: Social Graph Env
+emoji: 🔊
+colorFrom: indigo
+colorTo: indigo
+sdk: docker
+app_port: 8000
+---
+
 # Social Graph Manipulation Detection Environment
 
 ## Overview
