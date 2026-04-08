@@ -1,0 +1,4 @@
+pydantic>=2.0.0
+networkx>=3.0
+Faker>=19.0.0
+openai>=1.0.0

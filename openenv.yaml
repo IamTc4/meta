@@ -1,0 +1,27 @@
+name: social-graph-manip-detect-v1
+version: 1.0.0
+description: "Social Graph Manipulation Detection Environment. Detect coordinated inauthentic behavior inside synthetic social networks."
+entrypoint: env:SocialGraphEnv
+authors:
+  - Meta Hackathon
+tags:
+  - openenv
+  - graph
+  - trust-and-safety
+spaces:
+  observation:
+    type: pydantic
+    model: models:GraphObservation
+  action:
+    type: pydantic
+    model: models:InvestigationAction
+tasks:
+  - id: "task_01"
+    name: "Bot Farm Detection"
+    difficulty: "easy"
+  - id: "task_02"
+    name: "Astroturfing Ring Identification"
+    difficulty: "medium"
+  - id: "task_03"
+    name: "Adversarial CIB with Infiltration"
+    difficulty: "hard"
