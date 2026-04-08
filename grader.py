@@ -56,7 +56,10 @@ class Grader:
             
         if self.steps_taken < self.max_steps:
             reward += 0.10
-            
+        
+        # Ensure base cumulative reward + this final reward is within (0, 1)
+        # We handle the clamping in the environment/inference layer, but we can set 
+        # a baseline here to help.
         return reward
         
     def check_exhaustion(self) -> float:

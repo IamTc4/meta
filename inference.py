@@ -129,7 +129,8 @@ async def run_inference():
                 await asyncio.sleep(0.01)
 
             total_reward = sum(rewards_list)
-            score = max(0.0, min(1.0, total_reward))
+            # Hackathon Phase 2 check: Score must be strictly between 0 and 1.
+            score = max(0.01, min(0.99, total_reward))
             success = score > 0.0
 
         except Exception as e:
