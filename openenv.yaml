@@ -1,13 +1,23 @@
 name: social-graph-manip-detect-v1
-version: 1.0.0
-description: "Social Graph Manipulation Detection Environment. Detect coordinated inauthentic behavior inside synthetic social networks."
-entrypoint: env:SocialGraphEnv
+version: 1.1.0
+description: >
+  Social Graph Manipulation Detection Environment.
+  Agents must identify Coordinated Inauthentic Behavior (CIB) —
+  including bot farms, astroturfing rings, and adversarial infiltration —
+  inside deterministic synthetic social networks.
+
+entrypoint: server.environment:SocialGraphEnv
+
 authors:
   - Meta Hackathon
+
 tags:
   - openenv
   - graph
   - trust-and-safety
+  - CIB
+  - social-network
+
 spaces:
   observation:
     type: pydantic
@@ -15,13 +25,41 @@ spaces:
   action:
     type: pydantic
     model: models:InvestigationAction
+
 tasks:
-  - id: "task_01"
+  - id: task_01
     name: "Bot Farm Detection"
-    difficulty: "easy"
-  - id: "task_02"
+    difficulty: easy
+    description: >
+      Detect a 50-account bot farm embedded in a 500-account social graph.
+      Bots form a dense follow-clique and also follow organic accounts.
+      The structural signal is strong; step budget is 20.
+    max_steps: 20
+    seed: 42
+
+  - id: task_02
     name: "Astroturfing Ring Identification"
-    difficulty: "medium"
-  - id: "task_03"
+    difficulty: medium
+    description: >
+      Identify three coordinated astroturfing rings (30 accounts each) in a
+      1 910-organic-account network. Rings amplify via retweets but mimic
+      organic follow patterns. Step budget is 40.
+    max_steps: 40
+    seed: 42
+
+  - id: task_03
     name: "Adversarial CIB with Infiltration"
-    difficulty: "hard"
+    difficulty: hard
+    description: >
+      100 sophisticated infiltrators embedded in a 900-account organic graph.
+      Infiltrators look organic via follow structure; coordination is only
+      visible via narrow temporal burst windows. Step budget is 80.
+    max_steps: 80
+    seed: 42
+
+reward:
+  description: >
+    Incremental rewards for effective investigation actions, penalised for
+    false positives and redundant queries. Terminal F1-based bonus on SUBMIT_REPORT.
+  range: [-1.0, 1.0]
+  terminal_metric: f1_score

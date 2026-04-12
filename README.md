@@ -1,79 +1,205 @@
 ---
 title: Social Graph Env
-emoji: 🔊
+emoji: 🕵️
 colorFrom: indigo
-colorTo: indigo
+colorTo: purple
 sdk: docker
 app_port: 8000
 ---
 
 # Social Graph Manipulation Detection Environment
 
-## Overview
-This is an OpenEnv-compliant environment designed for the **Meta PyTorch OpenEnv Hackathon**. The environment tasks models with identifying and correctly flagging Coordinated Inauthentic Behavior (CIB) including bot farms, astroturfing rings, and adversarial infiltration strategies in simulated social networks.
+> **OpenEnv-compliant** · Meta PyTorch Hackathon submission
 
-Instead of reading text, agents must parse through typed graph snapshots (nodes, edges, timestamps) utilizing Pydantic. It's built for realism, determinism, and precision testing. 
+An agent is dropped into a synthetic social network and must identify
+**Coordinated Inauthentic Behavior (CIB)** — bot farms, astroturfing rings,
+and adversarial infiltrators — using only the signals it actively uncovers
+via investigation actions.
 
-## Action & Observation Spaces
-### Observations
-A typed `GraphObservation` is emitted every step. It includes collections of `AccountNode` and `EdgeRecord` to construct subgraph data, while hiding ground truth labels. 
-Metrics including global `GraphStats` and `TimeWindow`s allow agents to measure temporal anomaly rates.
+---
 
-### Actions
-Agents output `InvestigationAction`, consisting of:
-- `FLAG_ACCOUNT`: Labels a target as inauthentic (precision is essential).
-- `QUERY_NEIGHBORHOOD`: Retrieves the interactions expanding a target.
-- `REQUEST_TIMESERIES`: Requests temporal interaction spikes.
-- `SUBMIT_REPORT`: Finishes the episode.
+## Quickstart
 
-## Tasks
-1. **Task 01 (Easy): Bot Farm Detection** - Extract a 50-account cluster from a 500-account graph. Clear temporal and logic signatures.
-2. **Task 02 (Medium): Astroturfing Ring** - Identify 3-4 coordinated clusters in a 2000-account network with organic-looking interweaved engagement.
-3. **Task 03 (Hard): Adversarial CIB** - Highly difficult infiltration with history laundering in a 5000-account network. 
+### Docker (recommended)
 
-## Hugging Face Token Guide
-The baseline inference script connects to language models and OpenEnv systems via the Hugging Face API format. To use the environment effectively, you will need a valid `HF_TOKEN`.
-
-### Step 1: Generate an HF Token
-1. Log in or sign up at [Hugging Face](https://huggingface.co).
-2. Navigate to your settings: **Profile Icon -> Settings -> Access Tokens**.
-3. Choose **New token**. You can use a classic `Read` token, or a **Fine-grained** token (recommended for better security). If using a fine-grained token, ensure it has permissions to access inference endpoints or read public models, depending on your setup.
-4. Copy the token starting with `hf_...` and keep it secure.
-
-### Step 2: Configure the Token
-You must export the token as an environment variable before running the setup.
-
-**On Windows (PowerShell):**
-```powershell
-$env:HF_TOKEN="hf_your_token_here"
-```
-
-**On Linux/macOS:**
 ```bash
-export HF_TOKEN="hf_your_token_here"
+# Build
+docker build -t social-graph-env .
+
+# Run task_01 (default)
+docker run -p 8000:8000 social-graph-env
+
+# Run a specific task and seed
+docker run -p 8000:8000 -e TASK_ID=task_02 -e SEED=123 social-graph-env
 ```
 
-## Installation & Usage
+Verify the server is healthy:
 
-### Docker (Recommended)
-This environment is designed as a portable HF Space. Make sure your environment variable is set as shown above.
 ```bash
-cd social-graph-env
-docker build -t sgmd .
-docker run -e HF_TOKEN=$HF_TOKEN sgmd
+curl http://localhost:8000/health
 ```
 
-### Local Testing
-Ensure you have Python 3.11+.
+### Local (Python 3.11+)
+
 ```bash
 pip install -r requirements.txt
+uvicorn server.app:app --host 0.0.0.0 --port 8000
+```
+
+---
+
+## Connecting with the OpenEnv HTTP Client
+
+```python
+from openenv.core.client import HTTPEnvClient
+from models import InvestigationAction, GraphObservation, ActionType
+
+client = HTTPEnvClient(
+    base_url="http://localhost:8000",
+    action_class=InvestigationAction,
+    observation_class=GraphObservation,
+)
+
+# Start an episode
+obs = client.reset()
+print(f"Visible nodes: {len(obs.nodes)}, step budget: {obs.step_budget}")
+
+# Query a neighbour
+action = InvestigationAction(
+    action_type=ActionType.QUERY_NEIGHBORHOOD,
+    target_ids=[obs.nodes[0].id],
+    reasoning="Exploring the initial seed node.",
+)
+obs, reward, done, info = client.step(action)
+print(f"reward={reward:.4f}  done={done}  f1={info.get('f1', 0):.3f}")
+
+# Flag a suspected bot
+flag_action = InvestigationAction(
+    action_type=ActionType.FLAG_ACCOUNT,
+    target_ids=["ACC_BOT_000", "ACC_BOT_001"],
+    confidence=0.95,
+    reasoning="Dense mutual follow-clique detected.",
+)
+obs, reward, done, info = client.step(flag_action)
+
+# Submit the final report
+submit = InvestigationAction(action_type=ActionType.SUBMIT_REPORT)
+obs, reward, done, info = client.step(submit)
+print(f"Final reward={reward:.4f}  F1={info['f1']:.3f}")
+```
+
+---
+
+## API Endpoints
+
+| Method | Path         | Description                                      |
+|--------|--------------|--------------------------------------------------|
+| GET    | `/health`    | Liveness probe (returns `{"status": "ok"}`)      |
+| POST   | `/reset`     | Start a new episode; returns `GraphObservation`  |
+| POST   | `/step`      | Submit an `InvestigationAction`; returns `(obs, reward, done, info)` |
+| GET    | `/state`     | Read current observation without state mutation  |
+
+---
+
+## Tasks
+
+### Task 01 · Bot Farm Detection · Easy
+
+- **Graph**: 500 accounts (450 organic + 50 bots)
+- **CIB pattern**: Dense follow-clique among bots; bots follow organic accounts
+- **Step budget**: 20
+- **Signal**: High in-degree clustering within bot cluster
+
+### Task 02 · Astroturfing Ring Identification · Medium
+
+- **Graph**: 2 000 accounts (1 910 organic + 3 × 30 rings)
+- **CIB pattern**: Coordinated retweet bursts across three rings; organic-looking follows
+- **Step budget**: 40
+- **Signal**: Weight-2.5 retweet edges, intra-ring density
+
+### Task 03 · Adversarial CIB with Infiltration · Hard
+
+- **Graph**: 1 000 accounts (900 organic + 100 infiltrators)
+- **CIB pattern**: Infiltrators mimic organic follows but coordinate via narrow temporal mention bursts
+- **Step budget**: 80
+- **Signal**: Only detectable via `REQUEST_TIMESERIES` + temporal window analysis
+
+---
+
+## Action Space
+
+| Action                | Description                                             | Reward signal                        |
+|-----------------------|---------------------------------------------------------|--------------------------------------|
+| `QUERY_NEIGHBORHOOD`  | Expands visible subgraph around target account(s)       | +0.05 new node; −0.02 revisit; −0.30 3rd+ visit |
+| `FLAG_ACCOUNT`        | Marks account(s) as inauthentic                         | +0.10 correct; −0.15 false positive  |
+| `REQUEST_TIMESERIES`  | Requests temporal activity breakdown                    | +0.02 flat                           |
+| `SUBMIT_REPORT`       | Terminates episode; triggers F1 scoring                 | See table below                      |
+
+### Terminal F1 bonus (SUBMIT_REPORT)
+
+| F1 score   | Bonus  |
+|------------|--------|
+| ≥ 0.90     | +0.50  |
+| ≥ 0.75     | +0.30  |
+| ≥ 0.50     | +0.15  |
+| < 0.50     |  0.00  |
+| + efficiency (steps < max) | +0.10 |
+
+---
+
+## Observation Space (`GraphObservation`)
+
+```
+nodes            List[AccountNode]  – accounts in the visible subgraph
+edges            List[EdgeRecord]   – interactions in the visible subgraph
+posts            List[PostRecord]   – posts from visible accounts (≈ 60 %)
+temporal_windows List[TimeWindow]   – 4 × 6-hour activity windows
+graph_stats      GraphStats         – global graph metrics (always visible)
+step_budget      int                – remaining steps
+reward           float              – reward from last action
+done             bool               – episode completion flag
+info             dict               – step count, F1 metrics
+```
+
+---
+
+## Baseline Performance
+
+| Task    | F1 (LLM baseline) |
+|---------|-------------------|
+| task_01 | ~0.74             |
+| task_02 | ~0.51             |
+| task_03 | ~0.29             |
+
+Task 03's sharp drop demonstrates the need for temporal-graph reasoning agents
+beyond vanilla LLMs.
+
+---
+
+## Running the Baseline Inference Script
+
+```bash
+export HF_TOKEN="hf_your_token_here"
+export MODEL_NAME="meta-llama/Llama-3.1-8B-Instruct"
+
+# Optional: point at the HF Inference Providers API
+export API_BASE_URL="https://api-inference.huggingface.co/v1"
+
 python inference.py
 ```
 
-## Baseline Performance
-Using generic prompt instructions (see PRD for details):
-- Task 01: F1 Range ~0.74 
-- Task 02: F1 Range ~0.51
-- Task 03: F1 Range ~0.29
+---
 
-The drastic drop in Task 3 showcases the need for sophisticated temporal graph reasoning agents beyond baseline LLMs.
+## Validation
+
+```bash
+chmod +x validate-submission.sh
+./validate-submission.sh http://localhost:8000
+```
+
+The script:
+1. Hits `/health` to verify the server is up.
+2. Calls `/reset` and checks the response schema.
+3. Fires a `/step` with a `QUERY_NEIGHBORHOOD` action.
+4. Fires a `/step` with a `SUBMIT_REPORT` action.
+5. Prints PASS / FAIL for each check.

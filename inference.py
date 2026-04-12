@@ -1,141 +1,175 @@
+"""
+inference.py – Baseline LLM inference loop for Social Graph Manipulation Detection.
+
+Connects to a language model via an OpenAI-compatible API and runs each of
+the three environment tasks.  Output follows the OpenEnv evaluation format:
+
+    [START] task=<id> env=<name> model=<model>
+    [STEP]  step=<n> action=<json> reward=<r> done=<bool> error=<null|msg>
+    [END]   success=<bool> steps=<n> rewards=<comma-separated>
+
+Environment variables:
+    HF_TOKEN       – (required) API key / HF token
+    API_BASE_URL   – API base URL (default: https://api-inference.huggingface.co/v1)
+    MODEL_NAME     – model identifier (default: meta-llama/Llama-3.1-8B-Instruct)
+"""
+
 import os
 import random
 import time
-from typing import List, Optional
-from openai import OpenAI
-from env import SocialGraphEnv
-from models import InvestigationAction, ActionType
+from typing import Any, Dict, List, Tuple
 
-# Required Environment Variables
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4.5-preview")
-HF_TOKEN = os.getenv("HF_TOKEN")
+from openai import OpenAI
+
+from env import SocialGraphEnv
+from models import ActionType, GraphObservation, InvestigationAction
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+API_BASE_URL: str = os.getenv(
+    "API_BASE_URL", "https://api-inference.huggingface.co/v1"
+)
+MODEL_NAME: str = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
+HF_TOKEN: str | None = os.getenv("HF_TOKEN")
 
 if HF_TOKEN is None:
     raise ValueError("HF_TOKEN environment variable is required")
 
-# Initialize OpenAI client
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=HF_TOKEN
-)
+client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
 # Timeout in seconds for each LLM call
-LLM_TIMEOUT = 30 
+LLM_TIMEOUT: int = 30
 
-def get_llm_action(client, obs, model=MODEL_NAME):
+# Per-task wall-clock time limit (10 minutes)
+TASK_TIME_LIMIT: int = 600
+
+
+# ---------------------------------------------------------------------------
+# LLM action selection
+# ---------------------------------------------------------------------------
+
+def get_llm_action(obs: GraphObservation, model: str = MODEL_NAME) -> InvestigationAction:
     """
-    Calls the LLM to decide the next action based on current observations.
-    Includes a timeout and robust fallback.
+    Ask the LLM to choose the next investigation action.
+
+    Falls back to a deterministic heuristic on any API error or timeout.
     """
     system_prompt = (
-        "You are a Trust & Safety analyst. Your task is to detect Coordinated Inauthentic Behavior (CIB) "
-        "in a social graph. You can query node neighborhoods, flag accounts, or submit a final report. "
-        "Respond ONLY with an InvestigationAction in JSON format."
+        "You are a Trust & Safety analyst. Your task is to detect Coordinated "
+        "Inauthentic Behavior (CIB) in a social graph. You can:\n"
+        "  - QUERY_NEIGHBORHOOD: expand the visible subgraph around an account.\n"
+        "  - FLAG_ACCOUNT: mark accounts as inauthentic. Precision matters.\n"
+        "  - REQUEST_TIMESERIES: request temporal activity details.\n"
+        "  - SUBMIT_REPORT: finalise the episode.\n"
+        "Respond ONLY with a valid JSON object matching the InvestigationAction schema."
     )
-    
-    obs_json = obs.model_dump_json()
-    prompt = f"Observations: {obs_json}\nDecide the next action."
-    
+    prompt = f"Current observation:\n{obs.model_dump_json(indent=2)}\n\nChoose your next action."
+
     try:
-        response = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            response_format={ "type": "json_object" },
-            timeout=LLM_TIMEOUT
+            response_format={"type": "json_object"},
+            timeout=LLM_TIMEOUT,
         )
-        content = response.choices[0].message.content
+        content = resp.choices[0].message.content
         return InvestigationAction.model_validate_json(content)
-    except Exception as e:
-        # Fallback to smart random action if model fails or times out
-        if obs.step_budget <= 1:
-            return InvestigationAction(action_type=ActionType.SUBMIT_REPORT, reasoning="Budget ending or timeout.")
-        
-        if obs.nodes:
-            n = random.choice(obs.nodes)
-            return InvestigationAction(
-                action_type=ActionType.QUERY_NEIGHBORHOOD, 
-                target_ids=[n.id],
-                reasoning="Fallback action due to error/timeout."
-            )
-        return InvestigationAction(action_type=ActionType.SUBMIT_REPORT, reasoning="Fallback to submit.")
+    except Exception:
+        return _fallback_action(obs)
 
-def run_inference_loop():
-    # Benchmark name from environment variable or default
-    benchmark = os.getenv("MY_ENV_V4_BENCHMARK", "social-graph-env")
-    tasks = ["task_01", "task_02", "task_03"]
-    
-    for task_id in tasks:
-        # One [START] line at episode begin
-        print(f"[START] task={task_id} env={benchmark} model={MODEL_NAME}", flush=True)
-        
-        env = SocialGraphEnv(task_id=task_id)
-        obs = env.reset()
-        done = False
-        
-        rewards_list = []
-        total_steps = 0
-        success = False
-        
-        task_start_time = time.time()
-        # 10 minute limit per individual task
-        TASK_TIME_LIMIT = 600 
-        
-        try:
-            while not done:
-                total_steps += 1
-                
-                # Check if we are exceeding the per-task time limit
-                if time.time() - task_start_time > TASK_TIME_LIMIT:
-                    action = InvestigationAction(action_type=ActionType.SUBMIT_REPORT, reasoning="Time limit reached.")
-                else:
-                    action = get_llm_action(client, obs)
-                
-                error_msg = "null"
-                try:
-                    obs = env.step(action)
-                    reward = obs.reward
-                    done = obs.done
-                except Exception as e:
-                    reward = 0.0
-                    done = True
-                    error_msg = str(e).replace("\n", " ")
-                
-                rewards_list.append(reward)
-                
-                # One [STEP] line per step
-                action_str = action.model_dump_json().replace("\n", " ")
-                done_str = "true" if done else "false"
-                print(f"[STEP] step={total_steps} action={action_str} reward={reward:.2f} done={done_str} error={error_msg}", flush=True)
 
-            # Evaluate success (example logic: some reward > 0)
-            success = sum(rewards_list) > 0
+def _fallback_action(obs: GraphObservation) -> InvestigationAction:
+    """Deterministic fallback when the LLM call fails."""
+    if obs.step_budget <= 1:
+        return InvestigationAction(
+            action_type=ActionType.SUBMIT_REPORT,
+            reasoning="Budget nearly exhausted – submitting report.",
+        )
+    if obs.nodes:
+        target = random.choice(obs.nodes)
+        return InvestigationAction(
+            action_type=ActionType.QUERY_NEIGHBORHOOD,
+            target_ids=[target.id],
+            reasoning="Fallback: random neighbourhood expansion.",
+        )
+    return InvestigationAction(
+        action_type=ActionType.SUBMIT_REPORT,
+        reasoning="No nodes visible – submitting report.",
+    )
 
-        except Exception as e:
-            # Errors handled in the loop, but catch unexpected ones
-            pass
-        finally:
-            # One [END] line after episode (even on exception)
-            success_str = "true" if success else "false"
-            rewards_str = ",".join([f"{r:.2f}" for r in rewards_list])
-            if not rewards_str: 
-                rewards_str = "0.00"
-            
-            # CRITICAL: No extra fields like 'score=' here
-            print(f"[END] success={success_str} steps={total_steps} rewards={rewards_str}", flush=True)
-            
-            # Attempt to close env if method exists
-            if hasattr(env, 'close'):
-                env.close()
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------------------
+# Inference loop
+# ---------------------------------------------------------------------------
+
+def run_task(task_id: str, benchmark: str) -> None:
+    print(f"[START] task={task_id} env={benchmark} model={MODEL_NAME}", flush=True)
+
+    env = SocialGraphEnv(task_id=task_id)
+    obs = env.reset()
+    done = False
+
+    rewards_list: List[float] = []
+    total_steps = 0
+    success = False
+    task_start = time.time()
+
     try:
-        run_inference_loop()
-    except Exception as e:
-        # Final safety print to satisfy parser structure if possible
-        # but the loop handles its own [END] lines
+        while not done:
+            total_steps += 1
+
+            # Wall-clock guard: force submit if approaching time limit
+            if time.time() - task_start > TASK_TIME_LIMIT:
+                action = InvestigationAction(
+                    action_type=ActionType.SUBMIT_REPORT,
+                    reasoning="Task time limit reached.",
+                )
+            else:
+                action = get_llm_action(obs)
+
+            error_msg = "null"
+            try:
+                # step() now returns (obs, reward, done, info)
+                obs, reward, done, info = env.step(action)
+            except Exception as exc:
+                reward = 0.0
+                done = True
+                error_msg = str(exc).replace("\n", " ")
+
+            rewards_list.append(reward)
+            action_json = action.model_dump_json().replace("\n", " ")
+            done_str = "true" if done else "false"
+            print(
+                f"[STEP] step={total_steps} action={action_json} "
+                f"reward={reward:.4f} done={done_str} error={error_msg}",
+                flush=True,
+            )
+
+        success = sum(rewards_list) > 0
+
+    except Exception:
         pass
 
+    finally:
+        rewards_str = ",".join(f"{r:.4f}" for r in rewards_list) or "0.0000"
+        success_str = "true" if success else "false"
+        print(
+            f"[END] success={success_str} steps={total_steps} rewards={rewards_str}",
+            flush=True,
+        )
+        if hasattr(env, "close"):
+            env.close()
+
+
+def run_inference_loop() -> None:
+    benchmark = os.getenv("MY_ENV_V4_BENCHMARK", "social-graph-env")
+    for task_id in ["task_01", "task_02", "task_03"]:
+        run_task(task_id, benchmark)
+
+
+if __name__ == "__main__":
+    run_inference_loop()
